@@ -276,11 +276,6 @@ public:
         getApp().getSHAMapStore().onLedgerClosed (getValidatedLedger());
         mLedgerHistory.validatedLedger (l);
         getApp().getAmendmentTable().doValidatedLedger (l);
-
-    #if RIPPLE_HOOK_VALIDATORS
-        getApp().getValidators().onLedgerClosed (l->info().seq,
-            l->getHash(), l->info().parentHash);
-    #endif
     }
 
     void setPubLedger(Ledger::ref l)
