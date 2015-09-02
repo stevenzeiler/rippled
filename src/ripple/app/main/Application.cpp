@@ -175,6 +175,8 @@ public:
     void
     missing_node (std::uint32_t seq) override
     {
+        WriteLog (lsERROR, Ledger) << "Missing node in " << seq;
+
         // prevent recursive invocation
         std::unique_lock <std::mutex> lock (maxSeqLock);
 
@@ -210,6 +212,9 @@ public:
     void
     missing_node (uint256 const& hash) override
     {
+        WriteLog (lsERROR, Ledger) << "Missing node in "
+            << to_string (hash);
+
         if (hash.isNonZero())
             getApp().getInboundLedgers ().acquire (
                 hash, 0, InboundLedger::fcGENERIC);
@@ -1240,6 +1245,8 @@ bool ApplicationImp::loadOldLedger (
                          }
 
                          loadLedger->setClosed ();
+                         loadLedger->stateMap().flushDirty
+                             (hotACCOUNT_NODE, loadLedger->info().seq);
                          loadLedger->setAccepted (closeTime,
                              closeTimeResolution, ! closeTimeEstimated);
                      }

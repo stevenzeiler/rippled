@@ -245,7 +245,10 @@ Ledger::Ledger (uint256 const& parentHash,
         loaded = false;
 
     if (! loaded)
+    {
+        updateHash ();
         getApp().family().missing_node (info_.hash);
+    }
 }
 
 // Create a new ledger that's a snapshot of this one
@@ -1111,7 +1114,7 @@ Ledger::setup (Config const& config)
     }
     catch (...)
     {
-       throw;
+        throw;
     }
 
 
