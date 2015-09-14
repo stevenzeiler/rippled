@@ -741,6 +741,8 @@ public:
 
         m_amendmentTable->addInitial (
             getConfig ().section (SECTION_AMENDMENTS));
+        m_amendmentTable->addVetos (
+            getConfig ().section (SECTION_VETO_AMENDMENTS));
         initializePathfinding ();
 
         m_ledgerMaster->setMinValidations (getConfig ().VALIDATION_QUORUM);
