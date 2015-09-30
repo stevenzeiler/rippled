@@ -91,6 +91,7 @@ public:
 
     virtual ~Application () = default;
     virtual Config const& config() const = 0;
+    virtual Logs& logs() = 0;
     virtual boost::asio::io_service& getIOService () = 0;
     virtual CollectorManager&       getCollectorManager () = 0;
     virtual Family&                 family() = 0;
@@ -128,6 +129,7 @@ public:
 
     virtual bool serverOkay (std::string& reason) = 0;
 
+    virtual beast::Journal journal (std::string const& name) = 0;
     /** Retrieve the "wallet database"
 
         It looks like this is used to store the unique node list.
@@ -145,7 +147,9 @@ public:
 };
 
 std::unique_ptr <Application>
-make_Application(Config const& config, Logs& logs);
+make_Application(
+    std::unique_ptr<Config const> config,
+    std::unique_ptr<Logs> logs);
 
 // DEPRECATED
 extern Application& getApp ();

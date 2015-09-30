@@ -117,6 +117,7 @@ private:
     TreeNodeCache treecache_;
     FullBelowCache fullbelow_;
     NodeStore::Database& db_;
+    beast::Journal j_;
 
     // missing node handler
     std::uint32_t maxSeq = 0;
@@ -130,12 +131,19 @@ public:
             CollectorManager& collectorManager)
         : app_ (app)
         , treecache_ ("TreeNodeCache", 65536, 60, stopwatch(),
-            deprecatedLogs().journal("TaggedCache"))
+            app.journal("TaggedCache"))
         , fullbelow_ ("full_below", stopwatch(),
             collectorManager.collector(),
                 fullBelowTargetSize, fullBelowExpirationSeconds)
         , db_ (db)
+        , j_ (app.journal("SHAMap"))
     {
+    }
+
+    beast::Journal const&
+    journal() override
+    {
+        return j_;
     }
 
     FullBelowCache&
@@ -301,8 +309,8 @@ private:
     };
 
 public:
-    Config const& config_;
-    Logs& m_logs;
+    std::unique_ptr<Config const> config_;
+    std::unique_ptr<Logs> logs_;
     beast::Journal m_journal;
     Application::MutexType m_masterMutex;
 
@@ -375,35 +383,37 @@ public:
 
     //--------------------------------------------------------------------------
 
-    ApplicationImp (Config const& config, Logs& logs)
+    ApplicationImp (
+            std::unique_ptr<Config const> config,
+            std::unique_ptr<Logs> logs)
         : RootStoppable ("Application")
-        , BasicApp (numberOfThreads(config))
-        , config_ (config)
-        , m_logs (logs)
+        , BasicApp (numberOfThreads(*config))
+        , config_ (std::move(config))
+        , logs_ (std::move(logs))
 
-        , m_journal (m_logs.journal("Application"))
+        , m_journal (logs_->journal("Application"))
 
         , timeKeeper_ (make_TimeKeeper(
-            deprecatedLogs().journal("TimeKeeper")))
+            logs_->journal("TimeKeeper")))
 
         , m_txMaster (*this)
 
         , m_nodeStoreScheduler (*this)
 
-        , m_shaMapStore (make_SHAMapStore (*this, setup_SHAMapStore (
-                config_), *this, m_nodeStoreScheduler,
-                m_logs.journal ("SHAMapStore"), m_logs.journal ("NodeObject"),
-                m_txMaster, config_))
+        , m_shaMapStore (make_SHAMapStore (*this, setup_SHAMapStore (*config_),
+            *this, m_nodeStoreScheduler,
+            logs_->journal ("SHAMapStore"), logs_->journal ("NodeObject"),
+            m_txMaster, *config_))
 
         , m_nodeStore (m_shaMapStore->makeDatabase ("NodeStore.main", 4))
 
         , accountIDCache_(128000)
 
         , m_tempNodeCache ("NodeCache", 16384, 90, stopwatch(),
-            m_logs.journal("TaggedCache"))
+            logs_->journal("TaggedCache"))
 
         , m_collectorManager (CollectorManager::New (
-            config_.section (SECTION_INSIGHT), m_logs.journal("Collector")))
+            config_->section (SECTION_INSIGHT), logs_->journal("Collector")))
 
         , family_ (*this, *m_nodeStore, *m_collectorManager)
 
@@ -412,13 +422,13 @@ public:
         , m_localCredentials (*this)
 
         , m_resourceManager (Resource::make_Manager (
-            m_collectorManager->collector(), m_logs.journal("Resource")))
+            m_collectorManager->collector(), logs_->journal("Resource")))
 
         // The JobQueue has to come pretty early since
         // almost everything is a Stoppable child of the JobQueue.
         //
         , m_jobQueue (make_JobQueue (m_collectorManager->group ("jobq"),
-            m_nodeStoreScheduler, m_logs.journal("JobQueue")))
+            m_nodeStoreScheduler, logs_->journal("JobQueue"), *logs_))
 
         //
         // Anything which calls addJob must be a descendant of the JobQueue
@@ -427,11 +437,11 @@ public:
         , m_orderBookDB (*this, *m_jobQueue)
 
         , m_pathRequests (std::make_unique<PathRequests> (
-            *this, m_logs.journal("PathRequest"), m_collectorManager->collector ()))
+            *this, logs_->journal("PathRequest"), m_collectorManager->collector ()))
 
         , m_ledgerMaster (make_LedgerMaster (*this, stopwatch (),
             *m_jobQueue, m_collectorManager->collector (),
-            m_logs.journal("LedgerMaster")))
+            logs_->journal("LedgerMaster")))
 
         // VFALCO NOTE must come before NetworkOPs to prevent a crash due
         //             to dependencies in the destructor.
@@ -450,12 +460,12 @@ public:
             }))
 
         , m_acceptedLedgerCache ("AcceptedLedger", 4, 60, stopwatch(),
-            m_logs.journal("TaggedCache"))
+            logs_->journal("TaggedCache"))
 
         , m_networkOPs (make_NetworkOPs (*this, stopwatch(),
-            config_.RUN_STANDALONE, config_.NETWORK_QUORUM,
+            config_->RUN_STANDALONE, config_->NETWORK_QUORUM, config_->START_VALID,
             *m_jobQueue, *m_ledgerMaster, *m_jobQueue,
-            m_logs.journal("NetworkOPs")))
+            logs_->journal("NetworkOPs")))
 
         // VFALCO NOTE LocalCredentials starts the deprecated UNL service
         , m_deprecatedUNL (make_UniqueNodeList (*this, *m_jobQueue))
@@ -465,16 +475,16 @@ public:
 
         , m_amendmentTable (make_AmendmentTable
                             (weeks(2), MAJORITY_FRACTION,
-                             m_logs.journal("AmendmentTable")))
+                             logs_->journal("AmendmentTable")))
 
-        , mFeeTrack (std::make_unique<LoadFeeTrack>(m_logs.journal("LoadManager")))
+        , mFeeTrack (std::make_unique<LoadFeeTrack>(logs_->journal("LoadManager")))
 
         , mHashRouter (std::make_unique<HashRouter>(
             HashRouter::getDefaultHoldTime ()))
 
         , mValidations (make_Validations (*this))
 
-        , m_loadManager (make_LoadManager (*this, *this, m_logs.journal("LoadManager")))
+        , m_loadManager (make_LoadManager (*this, *this, logs_->journal("LoadManager")))
 
         , m_sweepTimer (this)
 
@@ -482,10 +492,10 @@ public:
 
         , m_signals (get_io_service())
 
-        , m_resolver (ResolverAsio::New (get_io_service(), m_logs.journal("Resolver")))
+        , m_resolver (ResolverAsio::New (get_io_service(), logs_->journal("Resolver")))
 
         , m_io_latency_sampler (m_collectorManager->collector()->make_event ("ios_latency"),
-            m_logs.journal("Application"), std::chrono::milliseconds (100), get_io_service())
+            logs_->journal("Application"), std::chrono::milliseconds (100), get_io_service())
     {
         add (m_resourceManager.get ());
 
@@ -548,7 +558,13 @@ public:
     Config const&
     config() const override
     {
-        return config_;
+        return *config_;
+    }
+
+    Logs&
+    logs() override
+    {
+        return *logs_;
     }
 
     boost::asio::io_service& getIOService () override
@@ -716,6 +732,8 @@ public:
 
     bool serverOkay (std::string& reason) override;
 
+    beast::Journal journal (std::string const& name) override;
+
     //--------------------------------------------------------------------------
     bool initSqliteDbs ()
     {
@@ -723,7 +741,7 @@ public:
         assert (mLedgerDB.get () == nullptr);
         assert (mWalletDB.get () == nullptr);
 
-        DatabaseCon::Setup setup = setup_DatabaseCon (config_);
+        DatabaseCon::Setup setup = setup_DatabaseCon (*config_);
         mTxnDB = std::make_unique <DatabaseCon> (setup, "transaction.db",
                 TxnDBInit, TxnDBCount);
         mLedgerDB = std::make_unique <DatabaseCon> (setup, "ledger.db",
@@ -763,7 +781,7 @@ public:
     void setup () override
     {
         // VFALCO NOTE: 0 means use heuristics to determine the thread count.
-        m_jobQueue->setThreadCount (0, config_.RUN_STANDALONE);
+        m_jobQueue->setThreadCount (0, config_->RUN_STANDALONE);
 
         // We want to intercept and wait for CTRL-C to terminate the process
         m_signals.add (SIGINT);
@@ -773,22 +791,22 @@ public:
 
         assert (mTxnDB == nullptr);
 
-        auto debug_log = config_.getDebugLogFile ();
+        auto debug_log = config_->getDebugLogFile ();
 
         if (!debug_log.empty ())
         {
             // Let debug messages go to the file but only WARNING or higher to
             // regular output (unless verbose)
 
-            if (!m_logs.open(debug_log))
+            if (!logs_->open(debug_log))
                 std::cerr << "Can't open log file " << debug_log << '\n';
 
-            if (m_logs.severity() > beast::Journal::kDebug)
-                m_logs.severity (beast::Journal::kDebug);
+            if (logs_->severity() > beast::Journal::kDebug)
+                logs_->severity (beast::Journal::kDebug);
         }
 
-        if (!config_.RUN_STANDALONE)
-            timeKeeper_->run(config_.SNTP_SERVERS);
+        if (!config_->RUN_STANDALONE)
+            timeKeeper_->run(config_->SNTP_SERVERS);
 
         if (!initSqliteDbs ())
         {
@@ -798,25 +816,26 @@ public:
 
         getLedgerDB ().getSession ()
             << boost::str (boost::format ("PRAGMA cache_size=-%d;") %
-                           (config_.getSize (siLgrDBCache) * 1024));
+                           (config_->getSize (siLgrDBCache) * 1024));
 
         getTxnDB ().getSession ()
                 << boost::str (boost::format ("PRAGMA cache_size=-%d;") %
-                               (config_.getSize (siTxnDBCache) * 1024));
+                               (config_->getSize (siTxnDBCache) * 1024));
 
-        mTxnDB->setupCheckpointing (m_jobQueue.get());
-        mLedgerDB->setupCheckpointing (m_jobQueue.get());
+        mTxnDB->setupCheckpointing (m_jobQueue.get(), logs());
+        mLedgerDB->setupCheckpointing (m_jobQueue.get(), logs());
 
-        if (!config_.RUN_STANDALONE)
+        if (!config_->RUN_STANDALONE)
             updateTables ();
 
         m_amendmentTable->addInitial (
-            config_.section (SECTION_AMENDMENTS));
+            config_->section (SECTION_AMENDMENTS));
         initializePathfinding ();
 
-        m_ledgerMaster->setMinValidations (config_.VALIDATION_QUORUM);
+        m_ledgerMaster->setMinValidations (
+            config_->VALIDATION_QUORUM, config_->LOCK_QUORUM);
 
-        auto const startUp = config_.START_UP;
+        auto const startUp = config_->START_UP;
         if (startUp == Config::FRESH)
         {
             m_journal.info << "Starting new Ledger";
@@ -829,7 +848,7 @@ public:
         {
             m_journal.info << "Loading specified Ledger";
 
-            if (!loadOldLedger (config_.START_LEDGER,
+            if (!loadOldLedger (config_->START_LEDGER,
                                 startUp == Config::REPLAY,
                                 startUp == Config::LOAD_FILE))
             {
@@ -839,7 +858,7 @@ public:
         else if (startUp == Config::NETWORK)
         {
             // This should probably become the default once we have a stable network.
-            if (!config_.RUN_STANDALONE)
+            if (!config_->RUN_STANDALONE)
                 m_networkOPs->needNetworkLedger ();
 
             startGenesisLedger ();
@@ -862,14 +881,14 @@ public:
         //
         // Set up UNL.
         //
-        if (!config_.RUN_STANDALONE)
+        if (!config_->RUN_STANDALONE)
             getUNL ().nodeBootstrap ();
 
-        mValidations->tune (config_.getSize (siValidationsSize), config_.getSize (siValidationsAge));
-        m_nodeStore->tune (config_.getSize (siNodeCacheSize), config_.getSize (siNodeCacheAge));
-        m_ledgerMaster->tune (config_.getSize (siLedgerSize), config_.getSize (siLedgerAge));
-        family().treecache().setTargetSize (config_.getSize (siTreeCacheSize));
-        family().treecache().setTargetAge (config_.getSize (siTreeCacheAge));
+        mValidations->tune (config_->getSize (siValidationsSize), config_->getSize (siValidationsAge));
+        m_nodeStore->tune (config_->getSize (siNodeCacheSize), config_->getSize (siNodeCacheAge));
+        m_ledgerMaster->tune (config_->getSize (siLedgerSize), config_->getSize (siLedgerAge));
+        family().treecache().setTargetSize (config_->getSize (siTreeCacheSize));
+        family().treecache().setTargetAge (config_->getSize (siTreeCacheAge));
 
         //----------------------------------------------------------------------
         //
@@ -882,15 +901,15 @@ public:
         //             move the instantiation inside a conditional:
         //
         //             if (!config_.RUN_STANDALONE)
-        m_overlay = make_Overlay (*this, setup_Overlay(config_), *m_jobQueue,
+        m_overlay = make_Overlay (*this, setup_Overlay(*config_), *m_jobQueue,
             *serverHandler_, *m_resourceManager, *m_resolver, get_io_service(),
-            config_);
+            *config_);
         add (*m_overlay); // add to PropertyStream
 
-        m_overlay->setupValidatorKeyManifests (config_, getWalletDB ());
+        m_overlay->setupValidatorKeyManifests (*config_, getWalletDB ());
 
         {
-            auto setup = setup_ServerHandler(config_, std::cerr);
+            auto setup = setup_ServerHandler(*config_, std::cerr);
             setup.makeContexts();
             serverHandler_->setup (setup, m_journal);
         }
@@ -901,7 +920,7 @@ public:
             if (! port.websockets())
                 continue;
             auto server = websocket::makeServer (
-                {*this, port, *m_resourceManager, getOPs(), m_journal, config_,
+                {*this, port, *m_resourceManager, getOPs(), m_journal, *config_,
                  *m_collectorManager});
             if (!server)
             {
@@ -915,11 +934,11 @@ public:
         //----------------------------------------------------------------------
 
         // Begin connecting to network.
-        if (!config_.RUN_STANDALONE)
+        if (!config_->RUN_STANDALONE)
         {
             // Should this message be here, conceptually? In theory this sort
             // of message, if displayed, should be displayed from PeerFinder.
-            if (config_.PEER_PRIVATE && config_.IPS.empty ())
+            if (config_->PEER_PRIVATE && config_->IPS.empty ())
                 m_journal.warning << "No outbound peer connections will be made";
 
             // VFALCO NOTE the state timer resets the deadlock detector.
@@ -1011,7 +1030,7 @@ public:
 
 
         {
-            if (!config_.RUN_STANDALONE)
+            if (!config_->RUN_STANDALONE)
             {
                 // VFALCO NOTE This seems unnecessary. If we properly refactor the load
                 //             manager then the deadlock detector can just always be "armed"
@@ -1058,7 +1077,7 @@ public:
             // VFALCO TODO Move all this into doSweep
 
             boost::filesystem::space_info space =
-                    boost::filesystem::space (config_.legacy ("database_path"));
+                    boost::filesystem::space (config_->legacy ("database_path"));
 
             // VFALCO TODO Give this magic constant a name and move it into a well documented header
             //
@@ -1090,7 +1109,7 @@ public:
         cachedSLEs_.expire();
 
         // VFALCO NOTE does the call to sweep() happen on another thread?
-        m_sweepTimer.setExpiration (config_.getSize (siSweepInterval));
+        m_sweepTimer.setExpiration (config_->getSize (siSweepInterval));
     }
 
 
@@ -1101,8 +1120,6 @@ private:
     Ledger::pointer getLastFullLedger();
     bool loadOldLedger (
         std::string const& ledgerID, bool replay, bool isFilename);
-
-    void onAnnounceAddress ();
 };
 
 //------------------------------------------------------------------------------
@@ -1111,19 +1128,17 @@ void ApplicationImp::startGenesisLedger ()
 {
     std::shared_ptr<Ledger> const genesis =
         std::make_shared<Ledger>(
-            create_genesis, config_, family());
+            create_genesis, *config_, family());
     m_ledgerMaster->storeLedger (genesis);
 
     auto const next = std::make_shared<Ledger>(
         open_ledger, *genesis, timeKeeper().closeTime());
     next->updateSkipList ();
     next->setClosed ();
-    next->setImmutable ();
-    m_ledgerMaster->storeLedger (next);
-
+    next->setImmutable (*config_);
     m_networkOPs->setLastCloseTime (next->info().closeTime);
-    openLedger_.emplace(next, config_,
-        cachedSLEs_, deprecatedLogs().journal("OpenLedger"));
+    openLedger_.emplace(next, *config_,
+        cachedSLEs_, logs_->journal("OpenLedger"));
     m_ledgerMaster->switchLCL (next);
 }
 
@@ -1142,31 +1157,32 @@ ApplicationImp::getLastFullLedger()
             return ledger;
 
         ledger->setClosed ();
-        ledger->setImmutable();
+        ledger->setImmutable(*config_);
 
         if (getLedgerMaster ().haveLedger (ledgerSeq))
             ledger->setValidated ();
 
         if (ledger->getHash () != ledgerHash)
         {
-            if (ShouldLog (lsERROR, Ledger))
+            auto j = journal ("Ledger");
+            if (j.error)
             {
-                WriteLog (lsERROR, Ledger) << "Failed on ledger";
+                j.error  << "Failed on ledger";
                 Json::Value p;
                 addJson (p, {*ledger, LedgerFill::full});
-                WriteLog (lsERROR, Ledger) << p;
+                j.error << p;
             }
 
             assert (false);
             return Ledger::pointer ();
         }
 
-        WriteLog (lsTRACE, Ledger) << "Loaded ledger: " << ledgerHash;
+        JLOG (journal ("Ledger").trace) << "Loaded ledger: " << ledgerHash;
         return ledger;
     }
     catch (SHAMapMissingNode& sn)
     {
-        WriteLog (lsWARNING, Ledger)
+        JLOG (journal ("Ledger").warning)
                 << "Database contains ledger with missing nodes: " << sn;
         return Ledger::pointer ();
     }
@@ -1243,7 +1259,7 @@ bool ApplicationImp::loadOldLedger (
                      }
                      else
                      {
-                         loadLedger = std::make_shared<Ledger> (seq, closeTime, config_, family());
+                         loadLedger = std::make_shared<Ledger> (seq, closeTime, *config_, family());
                          loadLedger->setTotalDrops(totalDrops);
 
                          for (Json::UInt index = 0; index < ledger.get().size(); ++index)
@@ -1276,7 +1292,8 @@ bool ApplicationImp::loadOldLedger (
                          loadLedger->stateMap().flushDirty
                              (hotACCOUNT_NODE, loadLedger->info().seq);
                          loadLedger->setAccepted (closeTime,
-                             closeTimeResolution, ! closeTimeEstimated);
+                             closeTimeResolution, ! closeTimeEstimated,
+                                *config_);
                      }
                  }
             }
@@ -1354,14 +1371,14 @@ bool ApplicationImp::loadOldLedger (
             return false;
         }
 
-        if (!loadLedger->walkLedger ())
+        if (!loadLedger->walkLedger (journal ("Ledger")))
         {
             m_journal.fatal << "Ledger is missing nodes.";
             assert(false);
             return false;
         }
 
-        if (!loadLedger->assertSane ())
+        if (!loadLedger->assertSane (journal ("Ledger")))
         {
             m_journal.fatal << "Ledger is not sane.";
             assert(false);
@@ -1375,8 +1392,8 @@ bool ApplicationImp::loadOldLedger (
         m_ledgerMaster->switchLCL (loadLedger);
         m_ledgerMaster->forceValid(loadLedger);
         m_networkOPs->setLastCloseTime (loadLedger->info().closeTime);
-        openLedger_.emplace(loadLedger, config_,
-            cachedSLEs_, deprecatedLogs().journal("OpenLedger"));
+        openLedger_.emplace(loadLedger, *config_,
+            cachedSLEs_, logs_->journal("OpenLedger"));
 
         if (replay)
         {
@@ -1468,6 +1485,11 @@ bool ApplicationImp::serverOkay (std::string& reason)
     return true;
 }
 
+beast::Journal ApplicationImp::journal (std::string const& name)
+{
+    return logs_->journal (name);
+}
+
 //VFALCO TODO clean this up since it is just a file holding a single member function definition
 
 static std::vector<std::string> getSchema (DatabaseCon& dbc, std::string const& dbName)
@@ -1491,13 +1513,15 @@ static std::vector<std::string> getSchema (DatabaseCon& dbc, std::string const& 
     return schema;
 }
 
-static bool schemaHas (DatabaseCon& dbc, std::string const& dbName, int line, std::string const& content)
+static bool schemaHas (
+    DatabaseCon& dbc, std::string const& dbName, int line,
+    std::string const& content, beast::Journal j)
 {
     std::vector<std::string> schema = getSchema (dbc, dbName);
 
     if (static_cast<int> (schema.size ()) <= line)
     {
-        WriteLog (lsFATAL, Application) << "Schema for " << dbName << " has too few lines";
+        JLOG (j.fatal) << "Schema for " << dbName << " has too few lines";
         throw std::runtime_error ("bad schema");
     }
 
@@ -1506,17 +1530,17 @@ static bool schemaHas (DatabaseCon& dbc, std::string const& dbName, int line, st
 
 void ApplicationImp::addTxnSeqField ()
 {
-    if (schemaHas (getTxnDB (), "AccountTransactions", 0, "TxnSeq"))
+    if (schemaHas (getTxnDB (), "AccountTransactions", 0, "TxnSeq", m_journal))
         return;
 
-    WriteLog (lsWARNING, Application) << "Transaction sequence field is missing";
+    JLOG (m_journal.warning) << "Transaction sequence field is missing";
 
     auto& session = getTxnDB ().getSession ();
 
     std::vector< std::pair<uint256, int> > txIDs;
     txIDs.reserve (300000);
 
-    WriteLog (lsINFO, Application) << "Parsing transactions";
+    JLOG (m_journal.info) << "Parsing transactions";
     int i = 0;
     uint256 transID;
 
@@ -1545,28 +1569,28 @@ void ApplicationImp::addTxnSeqField ()
         if (txnMeta.size () == 0)
         {
             txIDs.push_back (std::make_pair (transID, -1));
-            WriteLog (lsINFO, Application) << "No metadata for " << transID;
+            JLOG (m_journal.info) << "No metadata for " << transID;
         }
         else
         {
-            TxMeta m (transID, 0, txnMeta);
+            TxMeta m (transID, 0, txnMeta, journal ("TxMeta"));
             txIDs.push_back (std::make_pair (transID, m.getIndex ()));
         }
 
         if ((++i % 1000) == 0)
         {
-            WriteLog (lsINFO, Application) << i << " transactions read";
+            JLOG (m_journal.info) << i << " transactions read";
         }
     }
 
-    WriteLog (lsINFO, Application) << "All " << i << " transactions read";
+    JLOG (m_journal.info) << "All " << i << " transactions read";
 
     soci::transaction tr(session);
 
-    WriteLog (lsINFO, Application) << "Dropping old index";
+    JLOG (m_journal.info) << "Dropping old index";
     session << "DROP INDEX AcctTxIndex;";
 
-    WriteLog (lsINFO, Application) << "Altering table";
+    JLOG (m_journal.info) << "Altering table";
     session << "ALTER TABLE AccountTransactions ADD COLUMN TxnSeq INTEGER;";
 
     boost::format fmt ("UPDATE AccountTransactions SET TxnSeq = %d WHERE TransID = '%s';");
@@ -1577,11 +1601,11 @@ void ApplicationImp::addTxnSeqField ()
 
         if ((++i % 1000) == 0)
         {
-            WriteLog (lsINFO, Application) << i << " transactions updated";
+            JLOG (m_journal.info) << i << " transactions updated";
         }
     }
 
-    WriteLog (lsINFO, Application) << "Building new index";
+    JLOG (m_journal.info) << "Building new index";
     session << "CREATE INDEX AcctTxIndex ON AccountTransactions(Account, LedgerSeq, TxnSeq, TransID);";
 
     tr.commit ();
@@ -1589,42 +1613,37 @@ void ApplicationImp::addTxnSeqField ()
 
 void ApplicationImp::updateTables ()
 {
-    if (config_.section (ConfigSection::nodeDatabase ()).empty ())
+    if (config_->section (ConfigSection::nodeDatabase ()).empty ())
     {
-        WriteLog (lsFATAL, Application) << "The [node_db] configuration setting has been updated and must be set";
+        JLOG (m_journal.fatal) << "The [node_db] configuration setting has been updated and must be set";
         exitWithCode(1);
     }
 
     // perform any needed table updates
-    assert (schemaHas (getTxnDB (), "AccountTransactions", 0, "TransID"));
-    assert (!schemaHas (getTxnDB (), "AccountTransactions", 0, "foobar"));
+    assert (schemaHas (getTxnDB (), "AccountTransactions", 0, "TransID", m_journal));
+    assert (!schemaHas (getTxnDB (), "AccountTransactions", 0, "foobar", m_journal));
     addTxnSeqField ();
 
-    if (schemaHas (getTxnDB (), "AccountTransactions", 0, "PRIMARY"))
+    if (schemaHas (getTxnDB (), "AccountTransactions", 0, "PRIMARY", m_journal))
     {
-        WriteLog (lsFATAL, Application) << "AccountTransactions database should not have a primary key";
+        JLOG (m_journal.fatal) << "AccountTransactions database should not have a primary key";
         exitWithCode(1);
     }
 
-    if (config_.doImport)
+    if (config_->doImport)
     {
         NodeStore::DummyScheduler scheduler;
         std::unique_ptr <NodeStore::Database> source =
             NodeStore::Manager::instance().make_Database ("NodeStore.import", scheduler,
-                deprecatedLogs().journal("NodeObject"), 0,
-                config_[ConfigSection::importNodeDatabase ()]);
+                logs_->journal("NodeObject"), 0,
+                config_->section(ConfigSection::importNodeDatabase ()));
 
-        WriteLog (lsWARNING, NodeObject) <<
-            "Node import from '" << source->getName () << "' to '"
-                                 << getNodeStore().getName () << "'.";
+        JLOG (journal ("NodeObject").warning)
+            << "Node import from '" << source->getName () << "' to '"
+            << getNodeStore ().getName () << "'.";
 
         getNodeStore().import (*source);
     }
-}
-
-void ApplicationImp::onAnnounceAddress ()
-{
-    // NIKB CODEME
 }
 
 //------------------------------------------------------------------------------
@@ -1635,10 +1654,12 @@ Application::Application ()
 }
 
 std::unique_ptr<Application>
-make_Application (Config const& config, Logs& logs)
+make_Application (
+    std::unique_ptr<Config const> config,
+    std::unique_ptr<Logs> logs)
 {
-    return std::make_unique<ApplicationImp>(
-        config, logs);
+    return std::make_unique<ApplicationImp> (
+        std::move(config), std::move(logs));
 }
 
 Application& getApp ()

@@ -361,6 +361,7 @@ private:
 
     beast::http::message
     makeResponse (bool crawl, beast::http::message const& req,
+        beast::IP::Endpoint remoteAddress,
         uint256 const& sharedValue);
 
     void
@@ -440,15 +441,6 @@ private:
     void
     sendGetPeers();
 
-    /** Perform a secure handshake with the peer at the other end.
-        If this function returns false then we cannot guarantee that there
-        is no active man-in-the-middle attack taking place and the link
-        MUST be disconnected.
-        @return true if successful, false otherwise.
-    */
-    bool
-    sendHello();
-
     void
     addLedger (uint256 const& hash);
 
@@ -489,8 +481,8 @@ PeerImp::PeerImp (Application& app, std::unique_ptr<beast::asio::ssl_bundle>&& s
     : Child (overlay)
     , app_ (app)
     , id_ (id)
-    , sink_ (deprecatedLogs().journal("Peer"), makePrefix(id))
-    , p_sink_ (deprecatedLogs().journal("Protocol"), makePrefix(id))
+    , sink_ (app_.journal("Peer"), makePrefix(id))
+    , p_sink_ (app_.journal("Protocol"), makePrefix(id))
     , journal_ (sink_)
     , p_journal_ (p_sink_)
     , ssl_bundle_(std::move(ssl_bundle))

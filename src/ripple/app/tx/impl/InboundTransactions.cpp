@@ -82,7 +82,7 @@ public:
     {
         m_zeroSet.mSet = std::make_shared<SHAMap> (
             SHAMapType::TRANSACTION, uint256(),
-            app_.family(), deprecatedLogs().journal("SHAMap"));
+            app_.family());
         m_zeroSet.mSet->setUnbacked();
     }
 
@@ -147,7 +147,7 @@ public:
     {
         protocol::TMLedgerData& packet = *packet_ptr;
 
-        WriteLog (lsTRACE, InboundLedger) <<
+        JLOG (app_.journal("InboundLedger").trace) <<
             "Got data (" << packet.nodes ().size () << ") "
             "for acquiring ledger: " << hash;
 

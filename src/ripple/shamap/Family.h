@@ -20,9 +20,11 @@
 #ifndef RIPPLE_SHAMAP_FAMILY_H_INCLUDED
 #define RIPPLE_SHAMAP_FAMILY_H_INCLUDED
 
+#include <ripple/basics/Log.h>
 #include <ripple/shamap/FullBelowCache.h>
 #include <ripple/shamap/TreeNodeCache.h>
 #include <ripple/nodestore/Database.h>
+#include <beast/utility/Journal.h>
 #include <cstdint>
 
 namespace ripple {
@@ -31,6 +33,10 @@ class Family
 {
 public:
     virtual ~Family() = default;
+
+    virtual
+    beast::Journal const&
+    journal() = 0;
 
     virtual
     FullBelowCache&

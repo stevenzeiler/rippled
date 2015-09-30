@@ -148,7 +148,7 @@ class View_test
     {
         using namespace jtx;
         Env env(*this);
-        Config const config;
+        Config config;
         std::shared_ptr<Ledger const> const genesis =
             std::make_shared<Ledger>(
                 create_genesis, config, env.app().family());
@@ -412,7 +412,7 @@ class View_test
     {
         using namespace jtx;
         Env env(*this);
-        Config const config;
+        Config config;
         std::shared_ptr<Ledger const> const genesis =
             std::make_shared<Ledger> (
                 create_genesis, config, env.app().family());
@@ -532,7 +532,7 @@ class View_test
         // erase the item, apply.
         {
             Env env(*this);
-            Config const config;
+            Config config;
             std::shared_ptr<Ledger const> const genesis =
                 std::make_shared<Ledger>(
                     create_genesis, config, env.app().family());
@@ -550,6 +550,14 @@ class View_test
                 v2.apply(v1);
             }
             expect(! v1.exists(k(1)));
+        }
+
+        // Make sure OpenLedger::empty works
+        {
+            Env env(*this);
+            expect(env.openLedger.empty());
+            env.fund(XRP(10000), Account("test"));
+            expect(!env.openLedger.empty());
         }
     }
 

@@ -35,6 +35,7 @@ Transaction::Transaction (STTx::ref stx, Validate validate,
     noexcept
     : mTransaction (stx)
     , mApp (app)
+    , j_ (app.journal ("Ledger"))
 {
     try
     {
@@ -73,12 +74,12 @@ Transaction::pointer Transaction::sharedTransaction (
     }
     catch (std::exception& e)
     {
-        WriteLog(lsWARNING, Ledger) << "Exception constructing transaction" <<
+        JLOG (app.journal ("Ledger").warning) << "Exception constructing transaction" <<
             e.what ();
     }
     catch (...)
     {
-        WriteLog(lsWARNING, Ledger) << "Exception constructing transaction";
+        JLOG (app.journal ("Ledger").warning) << "Exception constructing transaction";
     }
 
     return std::shared_ptr<Transaction> ();
@@ -91,7 +92,8 @@ Transaction::pointer Transaction::sharedTransaction (
 bool Transaction::checkSign (std::string& reason, SigVerify sigVerify) const
 {
     bool const allowMultiSign = mApp.getLedgerMaster().
-        getValidatedRules().enabled (featureMultiSign, getConfig().features);
+        getValidatedRules().enabled (featureMultiSign,
+            mApp.config().features);
 
     if (! mFromPubKey.isValid ())
         reason = "Transaction has bad source public key";
@@ -103,7 +105,7 @@ bool Transaction::checkSign (std::string& reason, SigVerify sigVerify) const
     else
         return true;
 
-    WriteLog (lsWARNING, Ledger) << reason;
+    JLOG (j_.warning) << reason;
     return false;
 }
 

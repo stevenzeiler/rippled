@@ -81,6 +81,8 @@ std::string createHTTPPost (
 class RPCParser
 {
 private:
+    beast::Journal j_;
+
     // TODO New routine for parsing ledger parameters, other routines should standardize on this.
     static bool jvParseLedger (Json::Value& jvRequest, std::string const& strLedger)
     {
@@ -457,8 +459,8 @@ private:
         Json::Reader    reader;
         Json::Value     jvRequest;
 
-        WriteLog (lsTRACE, RPCParser) << "RPC method: " << jvParams[0u];
-        WriteLog (lsTRACE, RPCParser) << "RPC json: " << jvParams[1u];
+        JLOG (j_.trace) << "RPC method: " << jvParams[0u];
+        JLOG (j_.trace) << "RPC json: " << jvParams[1u];
 
         if (reader.parse (jvParams[1u].asString (), jvRequest))
         {
@@ -610,7 +612,7 @@ private:
         Json::Value     jvRequest;
         bool            bLedger     = 2 == jvParams.size ();
 
-        WriteLog (lsTRACE, RPCParser) << "RPC json: " << jvParams[0u];
+        JLOG (j_.trace) << "RPC json: " << jvParams[0u];
 
         if (reader.parse (jvParams[0u].asString (), jvRequest))
         {
@@ -838,6 +840,10 @@ private:
 public:
     //--------------------------------------------------------------------------
 
+    explicit
+    RPCParser (beast::Journal j)
+            :j_ (j){}
+
     static std::string EncodeBase64 (std::string const& s)
     {
         // FIXME: This performs terribly
@@ -870,8 +876,8 @@ public:
     {
         if (ShouldLog (lsTRACE, RPCParser))
         {
-            WriteLog (lsTRACE, RPCParser) << "RPC method:" << strMethod;
-            WriteLog (lsTRACE, RPCParser) << "RPC params:" << jvParams;
+            JLOG (j_.trace) << "RPC method:" << strMethod;
+            JLOG (j_.trace) << "RPC params:" << jvParams;
         }
 
         struct Command
@@ -962,7 +968,7 @@ public:
                 if ((command.minParams >= 0 && count < command.minParams) ||
                     (command.maxParams >= 0 && count > command.maxParams))
                 {
-                    WriteLog (lsDEBUG, RPCParser) <<
+                    JLOG (j_.debug) <<
                         "Wrong number of parameters for " << command.name <<
                         " minimum=" << command.minParams <<
                         " maximum=" << command.maxParams <<
@@ -1015,7 +1021,7 @@ struct RPCCallImp
     static bool onResponse (
         std::function<void (Json::Value const& jvInput)> callbackFuncP,
             const boost::system::error_code& ecResult, int iStatus,
-                std::string const& strData)
+                std::string const& strData, beast::Journal j)
     {
         if (callbackFuncP)
         {
@@ -1030,7 +1036,7 @@ struct RPCCallImp
                 throw std::runtime_error ("no response from server");
 
             // Parse reply
-            WriteLog (lsDEBUG, RPCParser) << "RPC reply: " << strData << std::endl;
+            JLOG (j.debug) << "RPC reply: " << strData << std::endl;
 
             Json::Reader    reader;
             Json::Value     jvReply;
@@ -1054,9 +1060,9 @@ struct RPCCallImp
     // Build the request.
     static void onRequest (std::string const& strMethod, Json::Value const& jvParams,
         const std::map<std::string, std::string>& mHeaders, std::string const& strPath,
-            boost::asio::streambuf& sb, std::string const& strHost)
+            boost::asio::streambuf& sb, std::string const& strHost, beast::Journal j)
     {
-        WriteLog (lsDEBUG, RPCParser) << "requestRPC: strPath='" << strPath << "'";
+        JLOG (j.debug) << "requestRPC: strPath='" << strPath << "'";
 
         std::ostream    osRequest (&sb);
         osRequest <<
@@ -1069,19 +1075,25 @@ struct RPCCallImp
 };
 
 //------------------------------------------------------------------------------
+namespace RPCCall {
 
-int RPCCall::fromCommandLine (const std::vector<std::string>& vCmd)
+int fromCommandLine (
+    Config const& config,
+    const std::vector<std::string>& vCmd,
+    Logs& logs)
 {
+    if (vCmd.empty ())
+        return 1;      // 1 = print usage.
+
     Json::Value jvOutput;
     int         nRet = 0;
     Json::Value jvRequest (Json::objectValue);
 
+    auto rpcJ = logs.journal ("RPCParser");
     try
     {
-        RPCParser   rpParser;
+        RPCParser   rpParser (rpcJ);
         Json::Value jvRpcParams (Json::arrayValue);
-
-        if (vCmd.empty ()) return 1;                                            // 1 = print usage.
 
         for (int i = 1; i != vCmd.size (); i++)
             jvRpcParams.append (vCmd[i]);
@@ -1093,7 +1105,7 @@ int RPCCall::fromCommandLine (const std::vector<std::string>& vCmd)
 
         jvRequest   = rpParser.parseCommand (vCmd[0], jvRpcParams, true);
 
-        WriteLog (lsTRACE, RPCParser) << "RPC Request: " << jvRequest << std::endl;
+        JLOG (rpcJ.trace) << "RPC Request: " << jvRequest << std::endl;
 
         if (jvRequest.isMember (jss::error))
         {
@@ -1106,7 +1118,7 @@ int RPCCall::fromCommandLine (const std::vector<std::string>& vCmd)
             try
             {
                 std::stringstream ss;
-                setup = setup_ServerHandler(getConfig(), ss);
+                setup = setup_ServerHandler(config, ss);
             }
             catch(...)
             {
@@ -1114,10 +1126,10 @@ int RPCCall::fromCommandLine (const std::vector<std::string>& vCmd)
                 // line client works without a config file
             }
 
-            if (getConfig().rpc_ip)
-                setup.client.ip = getConfig().rpc_ip->to_string();
-            if (getConfig().rpc_port)
-                setup.client.port = *getConfig().rpc_port;
+            if (config.rpc_ip)
+                setup.client.ip = config.rpc_ip->to_string();
+            if (config.rpc_port)
+                setup.client.port = *config.rpc_port;
 
             Json::Value jvParams (Json::arrayValue);
 
@@ -1142,6 +1154,8 @@ int RPCCall::fromCommandLine (const std::vector<std::string>& vCmd)
                         ? jvRequest["method"].asString () : vCmd[0],
                     jvParams,                               // Parsed, execute.
                     setup.client.secure != 0,                // Use SSL
+                    config.QUIET,
+                    logs,
                     std::bind (RPCCallImp::callRPCHandler, &jvOutput,
                                std::placeholders::_1));
                 isService.run(); // This blocks until there is no more outstanding async calls.
@@ -1204,16 +1218,17 @@ int RPCCall::fromCommandLine (const std::vector<std::string>& vCmd)
 
 //------------------------------------------------------------------------------
 
-void RPCCall::fromNetwork (
+void fromNetwork (
     boost::asio::io_service& io_service,
     std::string const& strIp, const int iPort,
     std::string const& strUsername, std::string const& strPassword,
     std::string const& strPath, std::string const& strMethod,
-    Json::Value const& jvParams, const bool bSSL,
+    Json::Value const& jvParams, const bool bSSL, const bool quiet,
+    Logs& logs,
     std::function<void (Json::Value const& jvInput)> callbackFuncP)
 {
     // Connect to localhost
-    if (!getConfig ().QUIET)
+    if (!quiet)
     {
         std::cerr << (bSSL ? "Securely connecting to " : "Connecting to ") <<
             strIp << ":" << iPort << std::endl;
@@ -1231,6 +1246,8 @@ void RPCCall::fromNetwork (
     const int RPC_REPLY_MAX_BYTES (256*1024*1024);
     const int RPC_NOTIFY_SECONDS (600);
 
+    auto j = logs.journal ("HTTPClient");
+
     HTTPClient::request (
         bSSL,
         io_service,
@@ -1241,12 +1258,15 @@ void RPCCall::fromNetwork (
             strMethod,
             jvParams,
             mapRequestHeaders,
-            strPath, std::placeholders::_1, std::placeholders::_2),
+            strPath, std::placeholders::_1, std::placeholders::_2, j),
         RPC_REPLY_MAX_BYTES,
         boost::posix_time::seconds (RPC_NOTIFY_SECONDS),
         std::bind (&RPCCallImp::onResponse, callbackFuncP,
                    std::placeholders::_1, std::placeholders::_2,
-                   std::placeholders::_3));
+                   std::placeholders::_3, j),
+        logs);
+}
+
 }
 
 } // ripple

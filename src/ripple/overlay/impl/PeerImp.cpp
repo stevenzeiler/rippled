@@ -59,8 +59,8 @@ PeerImp::PeerImp (Application& app, id_t id, endpoint_type remote_endpoint,
     : Child (overlay)
     , app_ (app)
     , id_(id)
-    , sink_(deprecatedLogs().journal("Peer"), makePrefix(id))
-    , p_sink_(deprecatedLogs().journal("Protocol"), makePrefix(id))
+    , sink_(app_.journal("Peer"), makePrefix(id))
+    , p_sink_(app_.journal("Protocol"), makePrefix(id))
     , journal_ (sink_)
     , p_journal_(p_sink_)
     , ssl_bundle_(std::move(ssl_bundle))
@@ -596,7 +596,7 @@ void PeerImp::doAccept()
 
     auto resp = makeResponse(
         ! overlay_.peerFinder().config().peerPrivate,
-            http_message_, sharedValue);
+            http_message_, remote_address_, sharedValue);
     beast::http::write (write_buffer_, resp);
 
     auto const protocol = BuildInfo::make_protocol(hello_.protoversion());
@@ -636,7 +636,9 @@ void PeerImp::doAccept()
 
 beast::http::message
 PeerImp::makeResponse (bool crawl,
-    beast::http::message const& req, uint256 const& sharedValue)
+    beast::http::message const& req,
+    beast::IP::Endpoint remote,
+    uint256 const& sharedValue)
 {
     beast::http::message resp;
     resp.request(false);
@@ -648,7 +650,8 @@ PeerImp::makeResponse (bool crawl,
     resp.headers.append("Connect-AS", "Peer");
     resp.headers.append("Server", BuildInfo::getFullVersionString());
     resp.headers.append ("Crawl", crawl ? "public" : "private");
-    protocol::TMHello hello = buildHello(sharedValue, app_);
+    protocol::TMHello hello = buildHello(sharedValue,
+        overlay_.setup().public_ip, remote, app_);
     appendHello(resp, hello);
     return resp;
 }
@@ -1051,7 +1054,7 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMTransaction> const& m)
                 flags |= SF_TRUSTED;
             }
 
-            if (! getConfig().VALIDATION_PRIV.isSet())
+            if (! app_.config().VALIDATION_PRIV.isSet())
             {
                 // For now, be paranoid and have each validator
                 // check each transaction, regardless of source
@@ -1208,7 +1211,7 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMProposeSet> const& m)
     RippleAddress signerPublic = RippleAddress::createNodePublic (
         strCopy (set.nodepubkey ()));
 
-    if (signerPublic == getConfig ().VALIDATION_PUB)
+    if (signerPublic == app_.config().VALIDATION_PUB)
     {
         p_journal_.trace << "Proposal: self";
         return;
@@ -1645,22 +1648,6 @@ PeerImp::sendGetPeers ()
         msg, protocol::mtGET_PEERS);
 
     send (packet);
-}
-
-bool
-PeerImp::sendHello()
-{
-    bool success;
-    std::tie(sharedValue_, success) = makeSharedValue(
-        stream_.native_handle(), journal_);
-    if (! success)
-        return false;
-
-    auto const hello = buildHello (sharedValue_, app_);
-    auto const m = std::make_shared<Message> (
-        std::move(hello), protocol::mtHELLO);
-    send (m);
-    return true;
 }
 
 void

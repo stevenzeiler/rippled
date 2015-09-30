@@ -21,15 +21,15 @@
 #include <ripple/app/ledger/LedgerTiming.h>
 #include <ripple/app/ledger/impl/ConsensusImp.h>
 #include <ripple/app/ledger/impl/LedgerConsensusImp.h>
-#include <ripple/basics/Log.h>
-#include <beast/utility/Journal.h>
 
 namespace ripple {
 
-ConsensusImp::ConsensusImp ()
-    : journal_ (deprecatedLogs().journal("Consensus"))
-    , feeVote_ (make_FeeVote (setup_FeeVote (getConfig().section ("voting")),
-        deprecatedLogs().journal("FeeVote")))
+ConsensusImp::ConsensusImp (
+        FeeVote::Setup const& voteSetup,
+        Logs& logs)
+    : journal_ (logs.journal("Consensus"))
+    , feeVote_ (make_FeeVote (voteSetup,
+        logs.journal("FeeVote")))
     , proposing_ (false)
     , validating_ (false)
     , lastCloseProposers_ (0)
@@ -174,9 +174,11 @@ ConsensusImp::peekStoredProposals ()
 //==============================================================================
 
 std::unique_ptr<Consensus>
-make_Consensus ()
+make_Consensus (Config const& config, Logs& logs)
 {
-    return std::make_unique<ConsensusImp> ();
+    return std::make_unique<ConsensusImp> (
+        setup_FeeVote (config.section ("voting")),
+        logs);
 }
 
 }

@@ -139,11 +139,11 @@ OverlayImpl::OverlayImpl (
     , work_ (boost::in_place(std::ref(io_service_)))
     , strand_ (io_service_)
     , setup_(setup)
-    , journal_ (deprecatedLogs().journal("Overlay"))
+    , journal_ (app_.journal("Overlay"))
     , serverHandler_(serverHandler)
     , m_resourceManager (resourceManager)
     , m_peerFinder (PeerFinder::make_Manager (*this, io_service,
-        stopwatch(), deprecatedLogs().journal("PeerFinder"), config))
+        stopwatch(), app_.journal("PeerFinder"), config))
     , m_resolver (resolver)
     , next_id_(1)
     , timer_count_(0)
@@ -170,7 +170,7 @@ OverlayImpl::onHandoff (std::unique_ptr <beast::asio::ssl_bundle>&& ssl_bundle,
         endpoint_type remote_endpoint)
 {
     auto const id = next_id_++;
-    beast::WrappedSink sink (deprecatedLogs()["Peer"], makePrefix(id));
+    beast::WrappedSink sink (app_.logs()["Peer"], makePrefix(id));
     beast::Journal journal (sink);
 
     Handoff handoff;
@@ -244,7 +244,10 @@ OverlayImpl::onHandoff (std::unique_ptr <beast::asio::ssl_bundle>&& ssl_bundle,
 
     RippleAddress publicKey;
     std::tie(publicKey, success) = verifyHello (hello,
-        sharedValue, journal, app_);
+        sharedValue,
+        setup_.public_ip,
+        beast::IPAddressConversion::from_asio(
+            remote_endpoint), journal, app_);
     if(! success)
         return handoff;
 
@@ -256,6 +259,7 @@ OverlayImpl::onHandoff (std::unique_ptr <beast::asio::ssl_bundle>&& ssl_bundle,
         publicKey.toPublicKey(), cluster);
     if (result != PeerFinder::Result::success)
     {
+        m_peerFinder->on_closed(slot);
         if (journal.debug) journal.debug <<
             "Peer " << remote_endpoint << " redirected, slots full";
         handoff.moved = false;
@@ -356,7 +360,7 @@ OverlayImpl::connect (beast::IP::Endpoint const& remote_endpoint)
     auto const p = std::make_shared<ConnectAttempt>(app_,
         io_service_, beast::IPAddressConversion::to_asio_endpoint(remote_endpoint),
             usage, setup_.context, next_id_++, slot,
-                deprecatedLogs().journal("Peer"), *this);
+                app_.journal("Peer"), *this);
 
     std::lock_guard<decltype(mutex_)> lock(mutex_);
     list_.emplace(p.get(), p);
@@ -486,21 +490,21 @@ OverlayImpl::onPrepare()
 {
     PeerFinder::Config config;
 
-    if (getConfig ().PEERS_MAX != 0)
-        config.maxPeers = getConfig ().PEERS_MAX;
+    if (app_.config().PEERS_MAX != 0)
+        config.maxPeers = app_.config().PEERS_MAX;
 
     config.outPeers = config.calcOutPeers();
 
     auto const port = serverHandler_.setup().overlay.port;
 
-    config.peerPrivate = getConfig().PEER_PRIVATE;
+    config.peerPrivate = app_.config().PEER_PRIVATE;
     config.wantIncoming =
         (! config.peerPrivate) && (port != 0);
     // if it's a private peer or we are running as standalone
     // automatic connections would defeat the purpose.
     config.autoConnect =
-        !getConfig().RUN_STANDALONE &&
-        !getConfig().PEER_PRIVATE;
+        !app_.config().RUN_STANDALONE &&
+        !app_.config().PEER_PRIVATE;
     config.listeningPort = port;
     config.features = "";
 
@@ -509,7 +513,7 @@ OverlayImpl::onPrepare()
 
     m_peerFinder->setConfig (config);
 
-    auto bootstrapIps (getConfig ().IPS);
+    auto bootstrapIps (app_.config().IPS);
 
     // If no IPs are specified, use the Ripple Labs round robin
     // pool to get some servers to insert into the boot cache.
@@ -539,9 +543,9 @@ OverlayImpl::onPrepare()
         });
 
     // Add the ips_fixed from the rippled.cfg file
-    if (! getConfig ().RUN_STANDALONE && !getConfig ().IPS_FIXED.empty ())
+    if (! app_.config().RUN_STANDALONE && !app_.config().IPS_FIXED.empty ())
     {
-        m_resolver.resolve (getConfig ().IPS_FIXED,
+        m_resolver.resolve (app_.config().IPS_FIXED,
             [this](
                 std::string const& name,
                 std::vector <beast::IP::Endpoint> const& addresses)
@@ -1017,17 +1021,20 @@ setup_Overlay (BasicConfig const& config)
 {
     Overlay::Setup setup;
     auto const& section = config.section("overlay");
-    set (setup.auto_connect, "auto_connect", section);
-    std::string promote;
-    set (promote, "become_superpeer", section);
-    if (promote == "never")
-        setup.promote = Overlay::Promote::never;
-    else if (promote == "always")
-        setup.promote = Overlay::Promote::always;
-    else
-        setup.promote = Overlay::Promote::automatic;
     setup.context = make_SSLContext();
     setup.expire = get<bool>(section, "expire", false);
+
+    std::string ip;
+    set (ip, "public_ip", section);
+    if (! ip.empty ())
+    {
+        bool valid;
+        std::tie (setup.public_ip, valid) =
+            beast::IP::Address::from_string (ip);
+        if (! valid || ! setup.public_ip.is_v4() ||
+                is_private (setup.public_ip))
+            throw std::runtime_error ("Configured public IP is invalid");
+    }
     return setup;
 }
 

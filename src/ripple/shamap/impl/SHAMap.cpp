@@ -26,10 +26,9 @@ namespace ripple {
 SHAMap::SHAMap (
     SHAMapType t,
     Family& f,
-    beast::Journal journal,
     std::uint32_t seq)
     : f_ (f)
-    , journal_(journal)
+    , journal_(f.journal())
     , seq_ (seq)
     , ledgerSeq_ (0)
     , state_ (SHAMapState::Modifying)
@@ -43,10 +42,9 @@ SHAMap::SHAMap (
 SHAMap::SHAMap (
     SHAMapType t,
     uint256 const& hash,
-    Family& f,
-    beast::Journal journal)
+    Family& f)
     : f_ (f)
-    , journal_(journal)
+    , journal_(f.journal())
     , seq_ (1)
     , ledgerSeq_ (0)
     , state_ (SHAMapState::Synching)
@@ -63,7 +61,7 @@ SHAMap::~SHAMap ()
 std::shared_ptr<SHAMap>
 SHAMap::snapShot (bool isMutable) const
 {
-    auto ret = std::make_shared<SHAMap> (type_, f_, journal_);
+    auto ret = std::make_shared<SHAMap> (type_, f_);
     SHAMap& newMap = *ret;
 
     if (!isMutable)
@@ -178,7 +176,7 @@ SHAMap::fetchNodeFromDB (uint256 const& hash) const
             try
             {
                 node = SHAMapAbstractNode::make(obj->getData(),
-                    0, snfPREFIX, hash, true);
+                    0, snfPREFIX, hash, true, f_.journal());
                 if (node)
                     canonicalize (hash, node);
             }
@@ -208,7 +206,8 @@ SHAMap::checkFilter(uint256 const& hash, SHAMapNodeID const& id,
     Blob nodeData;
     if (filter->haveNode (id, hash, nodeData))
     {
-        node = SHAMapAbstractNode::make(nodeData, 0, snfPREFIX, hash, true);
+        node = SHAMapAbstractNode::make(
+            nodeData, 0, snfPREFIX, hash, true, f_.journal ());
         if (node)
         {
             filter->gotNode (true, id, hash, nodeData, node->getType ());
@@ -383,7 +382,8 @@ SHAMap::descendAsync (SHAMapInnerNode* parent, int branch,
             if (!obj)
                 return nullptr;
 
-            ptr = SHAMapAbstractNode::make(obj->getData(), 0, snfPREFIX, hash, true);
+            ptr = SHAMapAbstractNode::make(
+                obj->getData(), 0, snfPREFIX, hash, true, f_.journal ());
 
             if (ptr && backed_)
                 canonicalize (hash, ptr);

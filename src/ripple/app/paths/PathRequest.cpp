@@ -242,7 +242,8 @@ Json::Value PathRequest::doCreate (
     if (parseJson (value) != PFR_PJ_INVALID)
     {
         valid = isValid (cache);
-        status = valid ? doUpdate(cache, true) : jvStatus;
+        if (! hasCompletion())
+            status = valid ? doUpdate(cache, true) : jvStatus;
     }
     else
     {
@@ -485,7 +486,8 @@ PathRequest::findPaths (
         *sandbox, saMaxAmount,
         convert_all_ ? STAmount(saDstAmount.issue(), STAmount::cMaxValue,
             STAmount::cMaxOffset) : saDstAmount,
-        *raDstAccount, *raSrcAccount, *result, &rcInput);
+        *raDstAccount, *raSrcAccount, *result,
+        app_.logs (), &rcInput);
 
     if (! convert_all_ &&
         ! fullLiquidityPath.empty() &&
@@ -498,7 +500,7 @@ PathRequest::findPaths (
 
         rc = path::RippleCalc::rippleCalculate(
             *sandbox, saMaxAmount, saDstAmount,
-                *raDstAccount, *raSrcAccount, *result);
+                *raDstAccount, *raSrcAccount, *result, app_.logs ());
         if (rc.result() != tesSUCCESS)
         {
             m_journal.warning << iIdentifier
@@ -591,30 +593,30 @@ Json::Value PathRequest::doUpdate (RippleLineCache::ref cache, bool fast)
     {
         // first pass
         if (loaded || fast)
-            iLevel = getConfig().PATH_SEARCH_FAST;
+            iLevel = app_.config().PATH_SEARCH_FAST;
         else
-            iLevel = getConfig().PATH_SEARCH;
+            iLevel = app_.config().PATH_SEARCH;
     }
-    else if ((iLevel == getConfig().PATH_SEARCH_FAST) && !fast)
+    else if ((iLevel == app_.config().PATH_SEARCH_FAST) && !fast)
     {
         // leaving fast pathfinding
-        iLevel = getConfig().PATH_SEARCH;
-        if (loaded && (iLevel > getConfig().PATH_SEARCH_FAST))
+        iLevel = app_.config().PATH_SEARCH;
+        if (loaded && (iLevel > app_.config().PATH_SEARCH_FAST))
             --iLevel;
     }
     else if (bLastSuccess)
     {
         // decrement, if possible
-        if (iLevel > getConfig().PATH_SEARCH ||
-            (loaded && (iLevel > getConfig().PATH_SEARCH_FAST)))
+        if (iLevel > app_.config().PATH_SEARCH ||
+            (loaded && (iLevel > app_.config().PATH_SEARCH_FAST)))
             --iLevel;
     }
     else
     {
         // adjust as needed
-        if (!loaded && (iLevel < getConfig().PATH_SEARCH_MAX))
+        if (!loaded && (iLevel < app_.config().PATH_SEARCH_MAX))
             ++iLevel;
-        if (loaded && (iLevel > getConfig().PATH_SEARCH_FAST))
+        if (loaded && (iLevel > app_.config().PATH_SEARCH_FAST))
             --iLevel;
     }
 

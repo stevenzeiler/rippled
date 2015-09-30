@@ -172,9 +172,9 @@ public:
 Ledger::Ledger (create_genesis_t, Config const& config, Family& family)
     : mImmutable (false)
     , txMap_  (std::make_shared <SHAMap> (SHAMapType::TRANSACTION,
-        family, deprecatedLogs().journal("SHAMap")))
+        family))
     , stateMap_ (std::make_shared <SHAMap> (SHAMapType::STATE,
-        family, deprecatedLogs().journal("SHAMap")))
+        family))
 {
     info_.seq = 1;
     info_.drops = SYSTEM_CURRENCY_START;
@@ -190,7 +190,7 @@ Ledger::Ledger (create_genesis_t, Config const& config, Family& family)
     stateMap_->flushDirty (hotACCOUNT_NODE, info_.seq);
     updateHash();
     setClosed();
-    setImmutable();
+    setImmutable(config);
     setup(config);
 }
 
@@ -205,13 +205,13 @@ Ledger::Ledger (uint256 const& parentHash,
                 std::uint32_t ledgerSeq,
                 bool& loaded,
                 Config const& config,
-                Family& family)
+                Family& family,
+                beast::Journal j)
     : mImmutable (true)
     , txMap_ (std::make_shared <SHAMap> (
-        SHAMapType::TRANSACTION, transHash, family,
-                deprecatedLogs().journal("SHAMap")))
+        SHAMapType::TRANSACTION, transHash, family))
     , stateMap_ (std::make_shared <SHAMap> (SHAMapType::STATE, accountHash,
-        family, deprecatedLogs().journal("SHAMap")))
+        family))
 {
     info_.seq = ledgerSeq;
     info_.parentCloseTime = parentCloseTime;
@@ -228,14 +228,14 @@ Ledger::Ledger (uint256 const& parentHash,
         !txMap_->fetchRoot (info_.txHash, nullptr))
     {
         loaded = false;
-        WriteLog (lsWARNING, Ledger) << "Don't have TX root for ledger";
+        JLOG (j.warning) << "Don't have TX root for ledger";
     }
 
     if (info_.accountHash.isNonZero () &&
         !stateMap_->fetchRoot (info_.accountHash, nullptr))
     {
         loaded = false;
-        WriteLog (lsWARNING, Ledger) << "Don't have AS root for ledger";
+        JLOG (j.warning) << "Don't have AS root for ledger";
     }
 
     txMap_->setImmutable ();
@@ -243,11 +243,11 @@ Ledger::Ledger (uint256 const& parentHash,
 
     if (! setup(config))
         loaded = false;
-
+    
     if (! loaded)
     {
         updateHash ();
-        getApp().family().missing_node (info_.hash);
+        family.missing_node (info_.hash);
     }
 }
 
@@ -268,7 +268,7 @@ Ledger::Ledger (open_ledger_t, Ledger const& prevLedger,
     NetClock::time_point closeTime)
     : mImmutable (false)
     , txMap_ (std::make_shared <SHAMap> (SHAMapType::TRANSACTION,
-        prevLedger.stateMap_->family(), deprecatedLogs().journal("SHAMap")))
+        prevLedger.stateMap_->family()))
     , stateMap_ (prevLedger.stateMap_->snapShot (true))
     , fees_(prevLedger.fees_)
 {
@@ -301,11 +301,9 @@ Ledger::Ledger (void const* data,
         Config const& config, Family& family)
     : mImmutable (true)
     , txMap_ (std::make_shared <SHAMap> (
-          SHAMapType::TRANSACTION, family,
-            deprecatedLogs().journal("SHAMap")))
+          SHAMapType::TRANSACTION, family))
     , stateMap_ (std::make_shared <SHAMap> (
-          SHAMapType::STATE, family,
-            deprecatedLogs().journal("SHAMap")))
+          SHAMapType::STATE, family))
 {
     SerialIter sit (data, size);
     setRaw (sit, hasPrefix, family);
@@ -317,11 +315,9 @@ Ledger::Ledger (std::uint32_t ledgerSeq,
             Family& family)
     : mImmutable (false)
     , txMap_ (std::make_shared <SHAMap> (
-          SHAMapType::TRANSACTION, family,
-            deprecatedLogs().journal("SHAMap")))
+          SHAMapType::TRANSACTION, family))
     , stateMap_ (std::make_shared <SHAMap> (
-          SHAMapType::STATE, family,
-            deprecatedLogs().journal("SHAMap")))
+          SHAMapType::STATE, family))
 {
     info_.seq = ledgerSeq;
     info_.closeTime = closeTime;
@@ -335,7 +331,7 @@ Ledger::~Ledger ()
 {
 }
 
-void Ledger::setImmutable ()
+void Ledger::setImmutable (Config const& config)
 {
     // Force update, since this is the only
     // place the hash transitions to valid
@@ -346,7 +342,7 @@ void Ledger::setImmutable ()
         txMap_->setImmutable ();
     if (stateMap_)
         stateMap_->setImmutable ();
-    setup(getConfig ());
+    setup(config);
 }
 
 void Ledger::updateHash()
@@ -395,9 +391,9 @@ void Ledger::setRaw (SerialIter& sit, bool hasPrefix, Family& family)
     info_.closeFlags = sit.get8 ();
     updateHash ();
     txMap_ = std::make_shared<SHAMap> (SHAMapType::TRANSACTION, info_.txHash,
-        family, deprecatedLogs().journal("SHAMap"));
+        family);
     stateMap_ = std::make_shared<SHAMap> (SHAMapType::STATE, info_.accountHash,
-        family, deprecatedLogs().journal("SHAMap"));
+        family);
 }
 
 void Ledger::addRaw (Serializer& s) const
@@ -406,7 +402,8 @@ void Ledger::addRaw (Serializer& s) const
 }
 
 void Ledger::setAccepted (
-    std::uint32_t closeTime, int closeResolution, bool correctCloseTime)
+    std::uint32_t closeTime, int closeResolution, bool correctCloseTime,
+        Config const& config)
 {
     // Used when we witnessed the consensus.  Rounds the close time, updates the
     // hash, and sets the ledger accepted and immutable.
@@ -415,7 +412,7 @@ void Ledger::setAccepted (
     info_.closeTime = closeTime;
     info_.closeTimeResolution = closeResolution;
     info_.closeFlags = correctCloseTime ? 0 : sLCF_NoConsensusTime;
-    setImmutable ();
+    setImmutable (config);
 }
 
 bool Ledger::addSLE (SLE const& sle)
@@ -793,7 +790,7 @@ void Ledger::visitStateItems (std::function<void (SLE::ref)> callback) const
     }
 }
 
-bool Ledger::walkLedger () const
+bool Ledger::walkLedger (beast::Journal j) const
 {
     std::vector <SHAMapMissingNode> missingNodes1;
     std::vector <SHAMapMissingNode> missingNodes2;
@@ -811,9 +808,9 @@ bool Ledger::walkLedger () const
 
     if (ShouldLog (lsINFO, Ledger) && !missingNodes1.empty ())
     {
-        WriteLog (lsINFO, Ledger)
+        JLOG (j.info)
             << missingNodes1.size () << " missing account node(s)";
-        WriteLog (lsINFO, Ledger)
+        JLOG (j.info)
             << "First: " << missingNodes1[0];
     }
 
@@ -830,16 +827,16 @@ bool Ledger::walkLedger () const
 
     if (ShouldLog (lsINFO, Ledger) && !missingNodes2.empty ())
     {
-        WriteLog (lsINFO, Ledger)
+        JLOG (j.info)
             << missingNodes2.size () << " missing transaction node(s)";
-        WriteLog (lsINFO, Ledger)
+        JLOG (j.info)
             << "First: " << missingNodes2[0];
     }
 
     return missingNodes1.empty () && missingNodes2.empty ();
 }
 
-bool Ledger::assertSane ()
+bool Ledger::assertSane (beast::Journal ledgerJ)
 {
     if (info_.hash.isNonZero () &&
             info_.accountHash.isNonZero () &&
@@ -856,7 +853,7 @@ bool Ledger::assertSane ()
     j [jss::accountTreeHash] = to_string (info_.accountHash);
     j [jss::transTreeHash] = to_string (info_.txHash);
 
-    WriteLog (lsFATAL, Ledger) << "ledger is not sane" << j;
+    JLOG (ledgerJ.fatal) << "ledger is not sane" << j;
 
     assert (false);
 
@@ -934,7 +931,8 @@ static bool saveValidatedLedger (
     Application& app, std::shared_ptr<Ledger> const& ledger, bool current)
 {
     // TODO(tom): Fix this hard-coded SQL!
-    WriteLog (lsTRACE, Ledger)
+    auto j = app.journal ("Ledger");
+    JLOG (j.trace)
         << "saveValidatedLedger "
         << (current ? "" : "fromAcquire ") << ledger->info().seq;
     static boost::format deleteLedger (
@@ -960,16 +958,16 @@ static bool saveValidatedLedger (
 
     if (! ledger->info().accountHash.isNonZero ())
     {
-        WriteLog (lsFATAL, Ledger) << "AH is zero: "
+        JLOG (j.fatal) << "AH is zero: "
                                    << getJson (*ledger);
         assert (false);
     }
 
     if (ledger->info().accountHash != ledger->stateMap().getHash ())
     {
-        WriteLog (lsFATAL, Ledger) << "sAL: " << ledger->info().accountHash
+        JLOG (j.fatal) << "sAL: " << ledger->info().accountHash
                                    << " != " << ledger->stateMap().getHash ();
-        WriteLog (lsFATAL, Ledger) << "saveAcceptedLedger: seq="
+        JLOG (j.fatal) << "saveAcceptedLedger: seq="
                                    << seq << ", current=" << current;
         assert (false);
     }
@@ -992,13 +990,13 @@ static bool saveValidatedLedger (
         aLedger = app.getAcceptedLedgerCache().fetch (ledger->info().hash);
         if (! aLedger)
         {
-            aLedger = std::make_shared<AcceptedLedger>(ledger, app.accountIDCache());
+            aLedger = std::make_shared<AcceptedLedger>(ledger, app.accountIDCache(), app.logs());
             app.getAcceptedLedgerCache().canonicalize(ledger->info().hash, aLedger);
         }
     }
     catch (...)
     {
-        WriteLog (lsWARNING, Ledger) << "An accepted ledger was missing nodes";
+        JLOG (j.warning) << "An accepted ledger was missing nodes";
         app.getLedgerMaster().failedSave(seq, ledger->info().hash);
         // Clients can now trust the database for information about this
         // ledger sequence.
@@ -1069,12 +1067,12 @@ static bool saveValidatedLedger (
                 sql += ";";
                 if (ShouldLog (lsTRACE, Ledger))
                 {
-                    WriteLog (lsTRACE, Ledger) << "ActTx: " << sql;
+                    JLOG (j.trace) << "ActTx: " << sql;
                 }
                 *db << sql;
             }
             else
-                WriteLog (lsWARNING, Ledger)
+                JLOG (j.warning)
                     << "Transaction in ledger " << seq
                     << " affects no accounts";
 
@@ -1114,7 +1112,7 @@ bool pendSaveValidated (Application& app,
 {
     if (! app.getHashRouter ().setFlags (ledger->info().hash, SF_SAVED))
     {
-        WriteLog (lsDEBUG, Ledger) << "Double pend save for "
+        JLOG (app.journal ("Ledger").debug) << "Double pend save for "
             << ledger->info().seq;
         return true;
     }
@@ -1123,7 +1121,7 @@ bool pendSaveValidated (Application& app,
 
     if (! app.pendingSaves().insert (ledger->info().seq))
     {
-        WriteLog (lsDEBUG, Ledger)
+        JLOG (app.journal ("Ledger").debug)
             << "Pend save with seq in pending saves "
             << ledger->info().seq;
         return true;
@@ -1175,46 +1173,6 @@ qualityDirDescriber (
         app.getOrderBookDB().addOrderBook(
             {{uTakerPaysCurrency, uTakerPaysIssuer},
                 {uTakerGetsCurrency, uTakerGetsIssuer}});
-    }
-}
-
-void Ledger::deprecatedUpdateCachedFees() const
-{
-    if (mBaseFee)
-        return;
-    std::uint64_t baseFee = getConfig ().FEE_DEFAULT;
-    std::uint32_t referenceFeeUnits = getConfig ().TRANSACTION_FEE_BASE;
-    std::uint32_t reserveBase = getConfig ().FEE_ACCOUNT_RESERVE;
-    std::int64_t reserveIncrement = getConfig ().FEE_OWNER_RESERVE;
-
-    // VFALCO NOTE this doesn't go through the CachedSLEs
-    auto const sle = this->read(keylet::fees());
-    if (sle)
-    {
-        if (sle->getFieldIndex (sfBaseFee) != -1)
-            baseFee = sle->getFieldU64 (sfBaseFee);
-
-        if (sle->getFieldIndex (sfReferenceFeeUnits) != -1)
-            referenceFeeUnits = sle->getFieldU32 (sfReferenceFeeUnits);
-
-        if (sle->getFieldIndex (sfReserveBase) != -1)
-            reserveBase = sle->getFieldU32 (sfReserveBase);
-
-        if (sle->getFieldIndex (sfReserveIncrement) != -1)
-            reserveIncrement = sle->getFieldU32 (sfReserveIncrement);
-    }
-
-    {
-        // VFALCO Why not do this before calling getASNode?
-        std::lock_guard<
-            std::mutex> lock(mutex_);
-        if (mBaseFee == 0)
-        {
-            mBaseFee = baseFee;
-            mReferenceFeeUnits = referenceFeeUnits;
-            mReserveBase = reserveBase;
-            mReserveIncrement = reserveIncrement;
-        }
     }
 }
 
@@ -1297,7 +1255,7 @@ loadLedgerHelper(std::string const& sqlSuffix, Application& app)
 
     if (!db->got_data ())
     {
-        WriteLog (lsDEBUG, Ledger) << "Ledger not found: " << sqlSuffix;
+        JLOG (app.journal("Ledger").debug) << "Ledger not found: " << sqlSuffix;
         return std::make_tuple (Ledger::pointer (), ledgerSeq, ledgerHash);
     }
 
@@ -1325,8 +1283,9 @@ loadLedgerHelper(std::string const& sqlSuffix, Application& app)
                                       closeResolution.value_or(0),
                                       ledgerSeq,
                                       loaded,
-                                      getConfig(),
-                                      app.family());
+                                      app.config(),
+                                      app.family(),
+                                      app.journal("Ledger"));
 
     if (!loaded)
         return std::make_tuple (Ledger::pointer (), ledgerSeq, ledgerHash);
@@ -1334,15 +1293,16 @@ loadLedgerHelper(std::string const& sqlSuffix, Application& app)
     return std::make_tuple (ledger, ledgerSeq, ledgerHash);
 }
 
-void finishLoadByIndexOrHash(Ledger::pointer& ledger)
+static
+void finishLoadByIndexOrHash(Ledger::pointer& ledger, Config const& config, beast::Journal j)
 {
     if (!ledger)
         return;
 
     ledger->setClosed ();
-    ledger->setImmutable ();
+    ledger->setImmutable (config);
 
-    WriteLog (lsTRACE, Ledger)
+    JLOG (j.trace)
         << "Loaded ledger: " << to_string (ledger->getHash ());
 
     ledger->setFull ();
@@ -1359,7 +1319,7 @@ loadByIndex (std::uint32_t ledgerIndex, Application& app)
             loadLedgerHelper (s.str (), app);
     }
 
-    finishLoadByIndexOrHash (ledger);
+    finishLoadByIndexOrHash (ledger, app.config(), app.journal ("Ledger"));
     return ledger;
 }
 
@@ -1374,7 +1334,7 @@ loadByHash (uint256 const& ledgerHash, Application& app)
             loadLedgerHelper (s.str (), app);
     }
 
-    finishLoadByIndexOrHash (ledger);
+    finishLoadByIndexOrHash (ledger, app.config(), app.journal ("Ledger"));
 
     assert (!ledger || ledger->getHash () == ledgerHash);
 
@@ -1428,7 +1388,8 @@ getHashesByIndex(std::uint32_t ledgerIndex,
 
     if (!lhO || !phO)
     {
-        WriteLog (lsTRACE, Ledger) << "Don't have ledger " << ledgerIndex;
+        JLOG (app.journal ("Ledger").trace)
+            << "Don't have ledger " << ledgerIndex;
         return false;
     }
 
@@ -1474,7 +1435,7 @@ getHashesByIndex (std::uint32_t minSeq, std::uint32_t maxSeq,
             hashes.second.zero ();
         if (!ph)
         {
-            WriteLog (lsWARNING, Ledger)
+            JLOG (app.journal ("Ledger").warning)
                 << "Null prev hash for ledger seq: " << ls;
         }
     }
