@@ -1,4 +1,4 @@
-![ipple](/images/ripple.png)
+![Ripple](/images/ripple.png)
 
 #The World’s Fastest and Most Secure Payment System
 
